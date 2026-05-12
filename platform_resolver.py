@@ -20,6 +20,7 @@ YTDL_OPTS = {
     "default_search": "ytsearch",
     "source_address": "0.0.0.0",
     "extract_flat": False,
+     "cookiefile": "cookies.txt",
 }
 
 HEADERS = {
