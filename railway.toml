@@ -1,0 +1,6 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "pip install -U yt-dlp && python bot.py"
+restartPolicyType = "always"
