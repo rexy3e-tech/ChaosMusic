@@ -12,6 +12,8 @@ import asyncio
 import random
 import shutil
 import yt_dlp
+import static_ffmpeg
+static_ffmpeg.add_paths()
 from collections import deque
 
 from config import (
