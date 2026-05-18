@@ -131,11 +131,9 @@ async def _ytdl_fetch(query: str, single: bool = True) -> list[dict]:
         if results and results[0].get("url"):
             return results
     except Exception as e:
-        err = str(e)
-        if "Sign in" not in err and "bot" not in err.lower():
-            raise
+        print(f"⚠️ YouTube failed: {e}")
 
-    # YouTube blocked — fallback to SoundCloud
+    # YouTube failed — fallback to SoundCloud
     print(f"⚠️ YouTube blocked, trying SoundCloud for: {query}")
 
     def _sc():
