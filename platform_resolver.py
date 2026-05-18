@@ -1,7 +1,6 @@
 """
 platform_resolver.py — Chaos Cafe Music Bot
-YouTube: tv_embedded + ios client bypass (no cookies needed)
-Spotify: oEmbed API (no Premium needed)
+Uses YouTube with PO token workaround + SoundCloud fallback
 """
 
 import re
@@ -15,26 +14,49 @@ HEADERS = {
 }
 
 # ─────────────────────────────────────────────
-#  yt-dlp — TV/iOS client bypasses bot detection
+#  yt-dlp opts — multiple fallback clients
 # ─────────────────────────────────────────────
-YTDL_OPTS = {
+def make_ytdl_opts(cookiefile: str | None = None) -> dict:
+    opts = {
+        "format": "bestaudio/best",
+        "noplaylist": False,
+        "quiet": True,
+        "no_warnings": True,
+        "default_search": "ytsearch",
+        "source_address": "0.0.0.0",
+        "extract_flat": False,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["mweb", "tv_embedded", "ios"],
+                "player_skip": ["webpage", "js"],
+            }
+        },
+    }
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
+    return opts
+
+# Check for cookies file
+import os
+_COOKIE_FILE = None
+for _path in ["cookies.txt", "/app/cookies.txt"]:
+    if os.path.exists(_path):
+        _COOKIE_FILE = _path
+        print(f"✅ Using cookies from {_path}")
+        break
+
+YTDL_OPTS = make_ytdl_opts(_COOKIE_FILE)
+
+# SoundCloud fallback opts (no auth needed)
+SC_OPTS = {
     "format": "bestaudio/best",
-    "noplaylist": False,
     "quiet": True,
     "no_warnings": True,
-    "default_search": "ytsearch",
+    "default_search": "scsearch",
     "source_address": "0.0.0.0",
-    "extract_flat": False,
-    "extractor_args": {
-        "youtube": {
-            "player_client": ["tv_embedded", "ios", "web"],
-        }
-    },
+    "noplaylist": True,
 }
 
-# ─────────────────────────────────────────────
-#  URL patterns
-# ─────────────────────────────────────────────
 PATTERNS = {
     "youtube":     re.compile(r"(youtube\.com|youtu\.be)"),
     "spotify":     re.compile(r"open\.spotify\.com/(track|album|playlist|artist)/([A-Za-z0-9]+)"),
@@ -71,22 +93,7 @@ def detect_platform(query: str) -> str:
         return "generic"
     return "search"
 
-# ─────────────────────────────────────────────
-#  yt-dlp extractor
-# ─────────────────────────────────────────────
-async def _ytdl_fetch(query: str, single: bool = True) -> list[dict]:
-    loop = asyncio.get_event_loop()
-
-    def _extract():
-        q = f"ytsearch:{query}" if not query.startswith("http") else query
-        opts = dict(YTDL_OPTS)
-        if single:
-            opts["noplaylist"] = True
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(q, download=False)
-        return info
-
-    info = await loop.run_in_executor(None, _extract)
+def _parse_entries(info: dict) -> list[dict]:
     entries = info.get("entries", [info]) if info else []
     results = []
     for e in entries:
@@ -103,8 +110,54 @@ async def _ytdl_fetch(query: str, single: bool = True) -> list[dict]:
         })
     return results
 
+async def _ytdl_fetch(query: str, single: bool = True) -> list[dict]:
+    """Try YouTube first, fallback to SoundCloud if blocked."""
+    loop = asyncio.get_event_loop()
+
+    # Try YouTube
+    def _yt():
+        q = f"ytsearch:{query}" if not query.startswith("http") else query
+        opts = dict(YTDL_OPTS)
+        if single:
+            opts["noplaylist"] = True
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            return ydl.extract_info(q, download=False)
+
+    try:
+        info = await asyncio.wait_for(
+            loop.run_in_executor(None, _yt), timeout=20
+        )
+        results = _parse_entries(info)
+        if results and results[0].get("url"):
+            return results
+    except Exception as e:
+        err = str(e)
+        if "Sign in" not in err and "bot" not in err.lower():
+            raise
+
+    # YouTube blocked — fallback to SoundCloud
+    print(f"⚠️ YouTube blocked, trying SoundCloud for: {query}")
+
+    def _sc():
+        q = f"scsearch:{query}" if not query.startswith("http") else query
+        with yt_dlp.YoutubeDL(SC_OPTS) as ydl:
+            return ydl.extract_info(q, download=False)
+
+    try:
+        info = await asyncio.wait_for(
+            loop.run_in_executor(None, _sc), timeout=20
+        )
+        results = _parse_entries(info)
+        if results:
+            print(f"✅ SoundCloud fallback worked for: {query}")
+            return results
+    except Exception as e:
+        raise ValueError(f"YouTube aur SoundCloud dono fail ho gaye: {e}")
+
+    raise ValueError("Koi source kaam nahi kar raha!")
+
 # ─────────────────────────────────────────────
-#  Spotify — oEmbed (free, no API/Premium needed)
+#  Spotify — oEmbed (no API/Premium needed)
 # ─────────────────────────────────────────────
 async def _resolve_spotify(url: str) -> list[dict]:
     m = PATTERNS["spotify"].search(url)
@@ -121,7 +174,6 @@ async def _resolve_spotify(url: str) -> list[dict]:
 
     title     = data.get("title", "")
     thumbnail = data.get("thumbnail_url", "")
-
     if not title:
         raise ValueError("Spotify se track info nahi mili")
 
@@ -132,7 +184,6 @@ async def _resolve_spotify(url: str) -> list[dict]:
             tracks[0]["thumbnail"] = tracks[0].get("thumbnail") or thumbnail
         return tracks
 
-    # album/playlist/artist — search by name
     return [{
         "title":       title,
         "url":         None,
