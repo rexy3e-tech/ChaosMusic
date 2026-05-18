@@ -1,5 +1,6 @@
 [build]
 builder = "nixpacks"
+nixpacksPlan = '{"phases":{"setup":{"nixPkgs":["python311","ffmpeg"]}}}'
 
 [deploy]
 startCommand = "pip install -U yt-dlp && python bot.py"
